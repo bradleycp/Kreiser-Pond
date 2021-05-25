@@ -1,0 +1,157 @@
+# Activative qiime2
+conda activate qiime2-2018.11
+
+# Import raw sequences
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path paired-end_sequences/lane_1 \
+  --input-format CasavaOneEightSingleLanePerSampleDirFmt \
+  --output-path paired-end_sequences/demux-paired-end_1.qza
+
+
+# Visualize sequencing statistics
+qiime demux summarize \
+  --i-data paired-end_sequences/demux-paired-end_1.qza \
+  --o-visualization paired-end_sequences/demux-paired-end_1.qzv
+
+
+# Quality control and feature table construction with DADA2
+mkdir feature_table
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs paired-end_sequences/demux-paired-end_1.qza \
+  --p-trunc-len-f 235\
+  --p-trunc-len-r 235\
+  --p-trim-left-f 19 \
+  --p-trim-left-r 19 \
+  --p-n-threads 40 \
+  --verbose \
+  --o-denoising-stats feature_table/dada2-stats_1.qza \
+  --o-representative-sequences feature_table/rep-seqs.qza \
+  --o-table feature_table/table.qza
+
+qiime metadata tabulate \
+  --m-input-file feature_table/dada2-stats_1.qza \
+  --o-visualization feature_table/dada2-stats_1.qzv
+
+
+# Visualize feature table 1 data summaries
+qiime feature-table summarize \
+  --i-table feature_table/table.qza \
+  --m-sample-metadata-file sample-metadata.tsv \
+  --o-visualization feature_table/table.qzv
+
+qiime feature-table tabulate-seqs \
+  --i-data feature_table/rep-seqs.qza \
+  --o-visualization feature_table/rep-seqs.qzv
+
+
+# Assign taxonomy using a pre-trained classifier
+mkdir taxonomy
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier feature_classifier/gg13_8_99_515F-806R.qza \
+  --i-reads feature_table/rep-seqs.qza \
+  --p-n-jobs 40 \
+  --o-classification taxonomy/taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy/taxonomy.qza \
+  --o-visualization taxonomy/taxonomy.qzv
+
+
+# Filter out reads assigned as mitochondria or chloroplast
+qiime taxa filter-table \
+  --i-table feature_table/table.qza \
+  --i-taxonomy taxonomy/taxonomy.qza \
+  --p-exclude mitochondria,Chloroplast \
+  --o-filtered-table feature_table/filtered_table.qza
+
+qiime taxa filter-seqs \
+  --i-sequences feature_table/rep-seqs.qza \
+  --i-taxonomy taxonomy/taxonomy.qza \
+  --p-exclude mitochondria,Chloroplast \
+  --o-filtered-sequences feature_table/filtered_rep-seqs.qza
+
+qiime feature-table tabulate-seqs \
+  --i-data feature_table/filtered_rep-seqs.qza \
+  --o-visualization feature_table/filtered_rep-seqs.qzv
+
+qiime feature-table summarize \
+  --i-table feature_table/filtered_table.qza \
+  --m-sample-metadata-file sample-metadata.tsv \
+  --o-visualization feature_table/filtered_table.qzv
+
+
+# Generate taxa bar chart of filtered data
+qiime taxa barplot \
+  --i-table feature_table/filtered_table.qza \
+  --i-taxonomy taxonomy/taxonomy.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization taxonomy/taxa-bar-plots_filtered.qzv
+
+
+# Generate a tree for phylogenetic diversity analyses
+qiime alignment mafft \
+  --i-sequences feature_table/filtered_rep-seqs.qza \
+  --o-alignment feature_table/filtered_rep-seqs_aligned.qza
+
+qiime alignment mask \
+  --i-alignment feature_table/filtered_rep-seqs_aligned.qza \
+  --o-masked-alignment feature_table/filtered_rep-seqs_aligned_masked.qza
+
+qiime phylogeny fasttree \
+  --i-alignment feature_table/filtered_rep-seqs_aligned_masked.qza \
+  --o-tree taxonomy/unrooted-tree.qza
+
+qiime phylogeny midpoint-root \
+  --i-tree taxonomy/unrooted-tree.qza \
+  --o-rooted-tree taxonomy/rooted-tree.qza
+
+
+# Diversity analysis. p-sampling-depth was determined using "Interactive Sample Detail" tab in filtered_table.qzv. The highest depth that retained the most number of samples was used.
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny taxonomy/rooted-tree.qza \
+  --i-table feature_table/filtered_table.qza \
+  --p-sampling-depth 37502 \
+  --m-metadata-file sample-metadata.tsv \
+  --output-dir diversity
+
+
+# Alpha diversity group significance
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity diversity/faith_pd_vector.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization diversity/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity diversity/shannon_vector.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization diversity/shannon-group-significance.qzv
+
+
+# Beta diversity sample site (KP1. KP2, KP3) significance
+qiime diversity beta-group-significance \
+  --i-distance-matrix diversity/bray_curtis_distance_matrix.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --m-metadata-column sampling_site \
+  --o-visualization diversity/bray_curtis-sampling_site-significance.qzv \
+  --p-pairwise
+
+# Beta diversity sample type (wet, dry) significance
+qiime diversity beta-group-significance \
+  --i-distance-matrix diversity/bray_curtis_distance_matrix.qza \
+  --m-metadata-file sample-metadata.tsv \
+  --m-metadata-column sample_type \
+  --o-visualization diversity/bray_curtis-sample_type-significance.qzv \
+  --p-pairwise
+
+
+# Alpha rarefaction plotting
+qiime diversity alpha-rarefaction \
+  --i-table feature_table/filtered_table.qza \
+  --i-phylogeny taxonomy/rooted-tree.qza \
+  --p-max-depth 60000 \
+  --p-steps 120 \
+  --m-metadata-file sample-metadata.tsv \
+  --o-visualization diversity/alpha-rarefaction-plot_60000.qzv
